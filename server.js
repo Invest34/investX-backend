@@ -26,7 +26,13 @@ db.connect()
 // WebSocket Server (For Login/Signup)
 const wss = new WebSocket.Server({ port: 5001 });
 
-wss.on("connection", ws => {
+wss.on("connection", (ws, req) => {
+    const origin = req.headers.origin;
+    if (origin !== "https://your-frontend-domain.com") {
+        ws.close(403, "Forbidden");
+        return;
+    }
+    
     console.log("New WebSocket connection");
 
     ws.on("message", async message => {
