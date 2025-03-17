@@ -1,6 +1,6 @@
 require("dotenv").config();
 const express = require("express");
-const { Pool } = require("pg");
+const mysql = require("mysql2");
 const cors = require("cors");
 const WebSocket = require("ws");
 const bcrypt = require("bcrypt");
@@ -10,8 +10,8 @@ const PORT = process.env.PORT || 5000;
 const SALT_ROUNDS = 10;
 
 // Ensure required environment variables exist
-if (!process.env.DATABASE_URL) {
-    console.error("❌ DATABASE_URL is missing in environment variables");
+if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_PASSWORD || !process.env.DB_NAME) {
+    console.error("❌ Database connection details are missing in environment variables");
     process.exit(1);
 }
 
@@ -19,18 +19,22 @@ if (!process.env.DATABASE_URL) {
 app.use(cors());
 app.use(express.json());
 
-// PostgreSQL Connection (Neon Database)
-const db = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // Required for Neon PostgreSQL
+// MySQL Connection (Using mysql2)
+const db = mysql.createConnection({
+    host: process.env.DB_HOST,        // Example: 'localhost' or Render's MySQL host
+    user: process.env.DB_USER,        // Your MySQL username
+    password: process.env.DB_PASSWORD, // Your MySQL password
+    database: process.env.DB_NAME     // Your database name, e.g. 'investXpro'
 });
 
-db.connect()
-    .then(() => console.log("✅ Connected to PostgreSQL"))
-    .catch(err => {
+// Connect to MySQL Database
+db.connect(err => {
+    if (err) {
         console.error("❌ Database connection failed:", err);
         process.exit(1);
-    });
+    }
+    console.log("✅ Connected to MySQL");
+});
 
 // WebSocket Server (For Login/Signup)
 const wss = new WebSocket.Server({ port: 5001 });
@@ -53,44 +57,61 @@ wss.on("connection", (ws, req) => {
 
             if (data.type === "signup") {
                 // Check if email already exists
-                const emailCheck = await db.query("SELECT * FROM users WHERE email = $1", [data.email]);
-                if (emailCheck.rows.length > 0) {
-                    ws.send(JSON.stringify({ status: "error", message: "Email already in use" }));
-                    return;
-                }
+                db.query("SELECT * FROM users WHERE email = ?", [data.email], async (err, results) => {
+                    if (err) {
+                        ws.send(JSON.stringify({ status: "error", message: "Internal server error" }));
+                        return;
+                    }
 
-                // Hash password
-                const hashedPassword = await bcrypt.hash(data.password, SALT_ROUNDS);
-                
-                // Insert user into database
-                await db.query(
-                    "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)",
-                    [data.username, data.email, hashedPassword]
-                );
+                    if (results.length > 0) {
+                        ws.send(JSON.stringify({ status: "error", message: "Email already in use" }));
+                        return;
+                    }
 
-                ws.send(JSON.stringify({ status: "success", message: "Signup successful" }));
+                    // Hash password
+                    const hashedPassword = await bcrypt.hash(data.password, SALT_ROUNDS);
+                    
+                    // Insert user into database
+                    db.query(
+                        "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+                        [data.username, data.email, hashedPassword],
+                        (err, result) => {
+                            if (err) {
+                                ws.send(JSON.stringify({ status: "error", message: "Internal server error" }));
+                                return;
+                            }
+                            ws.send(JSON.stringify({ status: "success", message: "Signup successful" }));
+                        }
+                    );
+                });
             }
 
             if (data.type === "login") {
-                const userQuery = await db.query("SELECT * FROM users WHERE email = $1", [data.email]);
-                if (userQuery.rows.length === 0) {
-                    ws.send(JSON.stringify({ status: "error", message: "Invalid email or password" }));
-                    return;
-                }
+                db.query("SELECT * FROM users WHERE email = ?", [data.email], async (err, results) => {
+                    if (err) {
+                        ws.send(JSON.stringify({ status: "error", message: "Database error" }));
+                        return;
+                    }
 
-                const user = userQuery.rows[0];
-                const match = await bcrypt.compare(data.password, user.password_hash);
+                    if (results.length === 0) {
+                        ws.send(JSON.stringify({ status: "error", message: "Invalid email or password" }));
+                        return;
+                    }
 
-                if (match) {
-                    ws.send(JSON.stringify({ 
-                        status: "success", 
-                        message: "Login successful", 
-                        userId: user.id, 
-                        username: user.username 
-                    }));
-                } else {
-                    ws.send(JSON.stringify({ status: "error", message: "Invalid email or password" }));
-                }
+                    const user = results[0];
+                    const match = await bcrypt.compare(data.password, user.password_hash);
+
+                    if (match) {
+                        ws.send(JSON.stringify({ 
+                            status: "success", 
+                            message: "Login successful", 
+                            userId: user.id, 
+                            username: user.username 
+                        }));
+                    } else {
+                        ws.send(JSON.stringify({ status: "error", message: "Invalid email or password" }));
+                    }
+                });
             }
         } catch (error) {
             console.error("❌ WebSocket Error:", error);
@@ -107,8 +128,14 @@ wss.on("connection", (ws, req) => {
 app.get("/investments/:userId", async (req, res) => {
     const userId = req.params.userId;
     try {
-        const investments = await db.query("SELECT * FROM investments WHERE user_id = $1", [userId]);
-        res.json({ status: "success", investments: investments.rows });
+        db.query("SELECT * FROM investments WHERE user_id = ?", [userId], (err, results) => {
+            if (err) {
+                console.error("❌ Database error:", err);
+                res.status(500).json({ status: "error", message: "Database error" });
+                return;
+            }
+            res.json({ status: "success", investments: results });
+        });
     } catch (err) {
         console.error("❌ Database error:", err);
         res.status(500).json({ status: "error", message: "Database error" });
