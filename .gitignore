@@ -1,0 +1,8 @@
+echo "node_modules/" >> .gitignore
+echo "package-lock.json" >> .gitignore
+echo ".env" >> .gitignore
+echo ".DS_Store" >> .gitignore
+node_modules/
+package-lock.json
+.env
+.DS_Store
