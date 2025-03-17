@@ -6,8 +6,14 @@ const WebSocket = require("ws");
 const bcrypt = require("bcrypt");
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 const SALT_ROUNDS = 10;
+
+// Ensure required environment variables exist
+if (!process.env.DATABASE_URL) {
+    console.error("❌ DATABASE_URL is missing in environment variables");
+    process.exit(1);
+}
 
 // Allow frontend to access backend
 app.use(cors());
@@ -21,25 +27,31 @@ const db = new Pool({
 
 db.connect()
     .then(() => console.log("✅ Connected to PostgreSQL"))
-    .catch(err => console.error("❌ Database connection failed:", err));
+    .catch(err => {
+        console.error("❌ Database connection failed:", err);
+        process.exit(1);
+    });
 
 // WebSocket Server (For Login/Signup)
 const wss = new WebSocket.Server({ port: 5001 });
 
 wss.on("connection", (ws, req) => {
+    const allowedOrigin = "https://investhorizon.onrender.com";
     const origin = req.headers.origin;
-    if (origin !== "https://your-frontend-domain.com") {
+
+    if (origin !== allowedOrigin) {
         ws.close(403, "Forbidden");
+        console.warn(`❌ WebSocket connection rejected from origin: ${origin}`);
         return;
     }
     
-    console.log("New WebSocket connection");
+    console.log("✅ New WebSocket connection");
 
     ws.on("message", async message => {
-        const data = JSON.parse(message);
-        
-        if (data.type === "signup") {
-            try {
+        try {
+            const data = JSON.parse(message);
+
+            if (data.type === "signup") {
                 // Check if email already exists
                 const emailCheck = await db.query("SELECT * FROM users WHERE email = $1", [data.email]);
                 if (emailCheck.rows.length > 0) {
@@ -57,13 +69,9 @@ wss.on("connection", (ws, req) => {
                 );
 
                 ws.send(JSON.stringify({ status: "success", message: "Signup successful" }));
-            } catch (error) {
-                ws.send(JSON.stringify({ status: "error", message: "Internal server error" }));
             }
-        }
 
-        if (data.type === "login") {
-            try {
+            if (data.type === "login") {
                 const userQuery = await db.query("SELECT * FROM users WHERE email = $1", [data.email]);
                 if (userQuery.rows.length === 0) {
                     ws.send(JSON.stringify({ status: "error", message: "Invalid email or password" }));
@@ -74,13 +82,19 @@ wss.on("connection", (ws, req) => {
                 const match = await bcrypt.compare(data.password, user.password_hash);
 
                 if (match) {
-                    ws.send(JSON.stringify({ status: "success", message: "Login successful", userId: user.id, username: user.username }));
+                    ws.send(JSON.stringify({ 
+                        status: "success", 
+                        message: "Login successful", 
+                        userId: user.id, 
+                        username: user.username 
+                    }));
                 } else {
                     ws.send(JSON.stringify({ status: "error", message: "Invalid email or password" }));
                 }
-            } catch (error) {
-                ws.send(JSON.stringify({ status: "error", message: "Database error" }));
             }
+        } catch (error) {
+            console.error("❌ WebSocket Error:", error);
+            ws.send(JSON.stringify({ status: "error", message: "Internal server error" }));
         }
     });
 });
@@ -92,6 +106,7 @@ app.get("/investments/:userId", async (req, res) => {
         const investments = await db.query("SELECT * FROM investments WHERE user_id = $1", [userId]);
         res.json({ status: "success", investments: investments.rows });
     } catch (err) {
+        console.error("❌ Database error:", err);
         res.status(500).json({ status: "error", message: "Database error" });
     }
 });
