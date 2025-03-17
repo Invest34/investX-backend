@@ -37,9 +37,9 @@ const wss = new WebSocket.Server({ port: 5001 });
 
 wss.on("connection", (ws, req) => {
     const allowedOrigin = "https://investhorizon.onrender.com";
-    const origin = req.headers.origin;
+    const origin = req.headers.origin || "unknown";
 
-    if (origin !== allowedOrigin) {
+    if (origin !== allowedOrigin && origin !== "unknown") {
         ws.close(403, "Forbidden");
         console.warn(`❌ WebSocket connection rejected from origin: ${origin}`);
         return;
@@ -96,6 +96,10 @@ wss.on("connection", (ws, req) => {
             console.error("❌ WebSocket Error:", error);
             ws.send(JSON.stringify({ status: "error", message: "Internal server error" }));
         }
+    });
+
+    ws.on("close", () => {
+        console.log("🔌 WebSocket connection closed");
     });
 });
 
